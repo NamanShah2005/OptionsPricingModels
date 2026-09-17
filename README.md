@@ -1,15 +1,18 @@
 # AAPL Options Pricing Models
 
-Implements and compares **Black-Scholes, Heston, and Merton Jump-Diffusion** models on real AAPL equity options data (2016–2020).
+Implements and compares Black-Scholes, Heston, and Merton Jump-Diffusion models on real AAPL equity options data (2016–2020). The pipeline covers data ingestion, date-driven rate calibration, implied vol surface construction, multi-expiry calibration, analytical Greeks, and publication-quality visualisations.
 
-The pipeline covers:
+## Table of Contents
 
-- Data ingestion
-- Date-driven risk-free rate calibration
-- Implied volatility surface construction
-- Multi-expiry calibration
-- Analytical Greeks
-- Publication-quality visualisations
+- [Models](#models)
+  - [Black-Scholes (1973)](#black-scholes-1973)
+  - [Heston Stochastic Volatility (1993)](#heston-stochastic-volatility-1993)
+  - [Merton Jump-Diffusion (1976)](#merton-jump-diffusion-1976)
+- [Greeks — Merton Jump-Diffusion](#greeks--merton-jump-diffusion)
+- [Volatility Surface & Results](#volatility-surface--results)
+- [Market Data & Rate Calibration](#market-data--rate-calibration)
+- [Installation & Usage](#installation--usage)
+- [References](#references)
 
 ---
 
@@ -19,41 +22,19 @@ The pipeline covers:
 
 Under the risk-neutral measure, the stock follows:
 
-$$
-dS_t = r S_t \, dt + \sigma S_t \, dW_t
-$$
+$$dS_t = r \, S_t \, dt + \sigma \, S_t \, dW_t$$
 
 The call price is:
 
-$$
-C = S \cdot N(d_1) - K e^{-rT} \cdot N(d_2)
-$$
+$$C = S \cdot N(d_1) - K e^{-rT} \cdot N(d_2)$$
 
-where
+$$d_1 = \frac{\ln(S/K) + (r + \frac{1}{2}\sigma^2)T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 - \sigma\sqrt{T}$$
 
-$$
-d_1 =
-\frac{
-\ln(S/K) + \left(r + \frac{1}{2}\sigma^2\right)T
-}{
-\sigma\sqrt{T}
-}
-$$
+Implemented without dividends, consistent with the original formulation. A flat vol σ is calibrated per-expiry by minimising vega-weighted relative price error via `scipy.optimize.minimize_scalar` (bounded Brent). The vol surface is built with QuantLib's `BlackVarianceSurface` and bicubic interpolation.
 
-$$
-d_2 = d_1 - \sigma\sqrt{T}
-$$
-
-Implemented without dividends, consistent with the original formulation.
-
-A flat volatility $\sigma$ is calibrated per expiry by minimising vega-weighted relative price error via `scipy.optimize.minimize_scalar` using bounded Brent optimisation.
-
-The volatility surface is constructed with QuantLib's `BlackVarianceSurface` and bicubic interpolation.
-
-**Limitation:** A single flat $\sigma$ cannot reproduce the volatility smile.
-
-- Average absolute error on the 1-year expiry: ~4.0%
-- Overall vega-weighted error across 17 expiries: 16.5%
+> **Limitation:** a single flat σ cannot reproduce the volatility smile.
+> - Average absolute error on the 1-year expiry: **~4.0%**
+> - Overall vega-weighted error across 17 expiries: **16.5%**
 
 ---
 
@@ -61,260 +42,134 @@ The volatility surface is constructed with QuantLib's `BlackVarianceSurface` and
 
 Variance evolves as a mean-reverting CIR process correlated with the spot:
 
-$$
-dS_t = (r-q)S_t\,dt + \sqrt{v_t}S_t\,dW_t^S
-$$
+$$dS_t = (r - q) S_t \, dt + \sqrt{v_t} \, S_t \, dW_t^S$$
 
-$$
-dv_t =
-\kappa(\theta-v_t)\,dt
-+
-\sigma_v\sqrt{v_t}\,dW_t^v
-$$
-
-with
-
-$$
-\mathbb{E}
-\left[
-dW_t^S dW_t^v
-\right]
-=
-\rho\,dt
-$$
-
-#### Parameters
+$$dv_t = \kappa(\theta - v_t) \, dt + \sigma_v \sqrt{v_t} \, dW_t^v, \qquad \mathbb{E}[dW_t^S \, dW_t^v] = \rho \, dt$$
 
 | Parameter | Meaning |
-|---|---|
+|:---:|---|
 | $v_0$ | Initial instantaneous variance |
 | $\kappa$ | Mean-reversion speed |
 | $\theta$ | Long-run variance |
 | $\sigma_v$ | Vol-of-vol |
 | $\rho$ | Spot-vol correlation (negative = leverage effect) |
 
-The Feller condition
+The Feller condition $2\kappa\theta > \sigma_v^2$ ensures variance stays positive. In practice, calibration often violates it — the optimiser pushes toward high vol-of-vol, a known pathology handled by the CIR reflection boundary.
 
-$$
-2\kappa\theta > \sigma_v^2
-$$
+Priced via QuantLib's `AnalyticHestonEngine` (Fourier inversion), calibrated with `LevenbergMarquardt` against market call prices. Dividend yield included via the Merton (1973) continuous-dividend extension.
 
-ensures variance stays positive.
+**Calibrated parameters (2018-05-15):**
 
-In practice, calibration often violates this condition. The optimiser can push toward high vol-of-vol, a known pathology handled by the CIR reflection boundary.
-
-Priced using QuantLib's `AnalyticHestonEngine` through Fourier inversion and calibrated with `LevenbergMarquardt` against market call prices.
-
-Dividend yield is included through the Merton (1973) continuous-dividend extension.
-
-#### Calibrated Parameters — 2018-05-15
-
-| Parameter | Value |
-|---|---:|
-| $v_0$ | 0.1704 |
-| $\kappa$ | 9.54 |
-| $\theta$ | 0.0694 |
-| $\sigma_v$ | 3.36 |
-| $\rho$ | −0.463 |
-
-**Average absolute error:** 1.52%
+| $v_0$ | $\kappa$ | $\theta$ | $\sigma_v$ | $\rho$ | Avg. abs. error |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 0.1704 | 9.54 | 0.0694 | 3.36 | −0.463 | 1.52% |
 
 ---
 
 ### Merton Jump-Diffusion (1976)
 
-The Merton model augments the Black-Scholes diffusion with a compound Poisson jump process:
+Augments BS diffusion with a compound Poisson jump process:
 
-$$
-dS_t =
-(r-q-\lambda\bar{\kappa})S_t\,dt
-+
-\sigma S_t\,dW_t
-+
-(J-1)S_t\,dN_t
-$$
+$$dS_t = (r - q - \lambda \bar{\kappa}) S_t \, dt + \sigma S_t \, dW_t + (J-1) S_t \, dN_t$$
 
-where $N_t$ is a Poisson process with intensity $\lambda$, and
+where $N_t$ is a Poisson process with intensity $\lambda$, and $J = e^Y$, $Y \sim \mathcal{N}(\mu_J, \sigma_J^2)$ is a lognormal jump size. The closed-form pricing series is:
 
-$$
-J=e^Y,
-\qquad
-Y\sim\mathcal{N}(\mu_J,\sigma_J^2)
-$$
+$$C^{\text{Merton}} = \sum_{n=0}^{\infty} \frac{e^{-\lambda' T}(\lambda' T)^n}{n!} \cdot C^{\text{BS}}\!\left(S, K, r_n, q, T, \sigma_n\right)$$
 
-is the lognormal jump size.
+$$r_n = r - \lambda\bar{\kappa} + \frac{n(\mu_J + \frac{1}{2}\sigma_J^2)}{T}, \qquad \sigma_n = \sqrt{\sigma^2 + \frac{n \sigma_J^2}{T}}, \qquad \bar{\kappa} = e^{\mu_J + \frac{1}{2}\sigma_J^2} - 1$$
 
-The closed-form pricing series is:
+Truncated at 50 terms (early exit when weights drop below `1e-12`). Calibrated via multi-start L-BFGS-B (5 random seeds, objective = IV-RMSE).
 
-$$
-C^{\text{Merton}}
-=
-\sum_{n=0}^{\infty}
-\frac{
-e^{-\lambda'T}(\lambda'T)^n
-}{
-n!
-}
-\cdot
-C^{\text{BS}}
-\left(
-S,K,r_n,q,T,\sigma_n
-\right)
-$$
+**Calibrated parameters (2018-05-15):**
 
-where
+| $\sigma$ | $\lambda$ | $\mu_J$ | $\sigma_J$ | IV-RMSE |
+|:---:|:---:|:---:|:---:|:---:|
+| 15.9% | 0.57 jumps/yr | −18.5% | 22.6% | 0.22% |
 
-$$
-r_n =
-r-\lambda\bar{\kappa}
-+
-\frac{
-n\left(\mu_J+\frac{1}{2}\sigma_J^2\right)
-}{
-T
-}
-$$
-
-and
-
-$$
-\sigma_n =
-\sqrt{
-\sigma^2+\frac{n\sigma_J^2}{T}
-}
-$$
-
-with
-
-$$
-\bar{\kappa}
-=
-e^{\mu_J+\frac{1}{2}\sigma_J^2}-1
-$$
-
-The series is truncated at 50 terms, with early termination when weights fall below `1e-12`.
-
-Calibration uses multi-start L-BFGS-B with 5 random seeds and an objective of IV-RMSE.
-
-#### Calibrated Parameters — 2018-05-15
-
-| Parameter | Value |
-|---|---:|
-| $\sigma$ | 15.9% |
-| $\lambda$ | 0.57 jumps/year |
-| $\mu_J$ | −18.5% |
-| $\sigma_J$ | 22.6% |
-
-This implies roughly one crash-sized jump per year, averaging a −14.7% return, which is economically consistent with AAPL tail-risk pricing over 2018.
-
-**IV-RMSE:** 0.22%
+This implies roughly one crash-sized jump per year averaging a −14.7% return — economically consistent with AAPL tail risk pricing over 2018.
 
 ---
 
 ## Greeks — Merton Jump-Diffusion
 
-Greeks are derived analytically by differentiating the infinite series term-by-term and applying the chain rule for the per-term volatility:
+Greeks are derived analytically by differentiating the infinite series term-by-term, applying the chain rule for the per-term vol:
 
-$$
-\frac{\partial\sigma_n}{\partial\sigma}
-=
-\frac{\sigma}{\sigma_n}
-$$
+$$\frac{\partial \sigma_n}{\partial \sigma} = \frac{\sigma}{\sigma_n}, \qquad \frac{\partial \sigma_n}{\partial \sigma_J} = \frac{n \sigma_J / T}{\sigma_n}$$
 
-$$
-\frac{\partial\sigma_n}{\partial\sigma_J}
-=
-\frac{n\sigma_J/T}{\sigma_n}
-$$
-
-### ATM Greeks
-
-Parameters:
-
-- $S = K = 186.44$
-- $T = 1.101$ years
-- Quote date: **2018-05-15**
+**ATM Greeks at S = K = 186.44, T = 1.101 yr (2018-05-15):**
 
 | Greek | Value | Interpretation |
-|---|---:|---|
+|---|:---:|---|
 | Price | $19.51 | ATM call value |
-| Delta $\Delta$ | 0.6151 | $0.615 gain per $1 spot move |
-| Gamma $\Gamma$ | 0.00867 | Delta change per $1 spot move |
-| Vega $\sigma$ | 52.88 | $52.88 per unit diffusion-vol increase |
-| Vega $\sigma_J$ | 26.90 | $26.90 per unit jump-vol increase |
-| Theta $\Theta$ | −0.02864 | ~$0.029 loss per calendar day |
-| Rho $\rho$ | 1.0481 | ~$1.05 per 1 bp rise in $r$ |
+| Delta (Δ) | 0.6151 | $0.615 gain per $1 spot move |
+| Gamma (Γ) | 0.00867 | Delta change per $1 spot move |
+| Vega (σ) | 52.88 | $52.88 per unit diffusion vol increase |
+| Vega (σ_J) | 26.90 | $26.90 per unit jump vol increase |
+| Theta (Θ) | −0.02864 | ~$0.029 loss per calendar day |
+| Rho (ρ) | 1.0481 | $1.05 per 1 bp rise in r |
 
-![Merton Greeks Term Structure](graphs/aapl_merton_greeks.png)
+![Greeks term structure](graphs/aapl_merton_greeks.png)
 
 ---
 
 ## Volatility Surface & Results
 
-The market volatility surface is constructed using QuantLib's `BlackVarianceSurface` with bicubic interpolation across **17 expiries**.
-
-The resulting surface shows:
-
-- Pronounced left-wing skew
-- Upward-sloping term structure
-- Volatility increasing from approximately **18% short-dated** to **26% at 2 years**
-
-### Model Comparison
+The market vol surface is built from QuantLib `BlackVarianceSurface` with bicubic interpolation across 17 expiries, showing a pronounced left-wing skew and upward-sloping term structure (~18% short-dated to ~26% at 2 years).
 
 | Metric | Black-Scholes | Heston | Merton JDM |
-|---|---:|---:|---:|
+|---|:---:|:---:|:---:|
 | Parameters | 1 per expiry | 5 | 4 |
 | Avg price error (1yr) | 3.97% | 1.52% | 0.34% |
 | IV-RMSE (1yr) | ~400 bp | ~150 bp | 14 bp |
 | Smile shape | Flat | Monotone skew | Flexible skew + curvature |
 | Greeks | Analytical | Numerical / QL | Analytical (series) |
 
-### Volatility Surface
-
-![AAPL Black-Scholes Volatility Surface](graphs/aapl_bs_vol_surface_3d.png)
-
-### Merton Smile Fit
-
-![Merton Smile Fit](graphs/aapl_merton_smile_v2.png)
+![Vol surface](graphs/aapl_bs_vol_surface_3d.png)
+![Merton smile fit](graphs/aapl_merton_smile_v2.png)
 
 ---
 
 ## Market Data & Rate Calibration
 
-### Data
+**Data:** AAPL options chain (CBOE-style CSV) from [Kaggle](https://www.kaggle.com/kylegraupe/aapl-options-data-2016-to-2020) by Kyle Graupe, spanning 2016-01-04 to 2020-12-31. Strike filter: ±20% moneyness band around spot.
 
-AAPL options chain data in CBOE-style CSV format from **Kaggle**, provided by Kyle Graupe:
-
-[![Kaggle Dataset](https://img.shields.io/badge/Dataset-Kaggle-blue)](https://www.kaggle.com/kylegraupe/aapl-options-data-2016-to-2020)
-
-**Period:** 2016-01-04 to 2020-12-31
-
-**Strike filter:** ±20% moneyness band around spot.
-
-Risk-free rates are obtained from **FRED H.15 (1-year Treasury CMT)**.
-
-AAPL dividend yields and risk-free rates are linearly interpolated by fractional year rather than using a fixed arbitrary rate.
-
-Black-Scholes is implemented without dividends, consistent with the original formulation.
-
-Heston and Merton include continuous dividend yield.
+Risk-free rates from FRED H.15 (1-year Treasury CMT) and AAPL dividend yields are linearly interpolated by fractional year — no fixed arbitrary rate. Black-Scholes is implemented without dividends per its original formulation; Heston and Merton include continuous dividend yield.
 
 ---
 
 ## Installation & Usage
 
-### Requirements
-
-- Python 3.9+
-- NumPy
-- pandas
-- SciPy
-- Matplotlib
-- QuantLib
-
-QuantLib can be tricky to install on Windows. If `pip` installation fails, using Conda is recommended.
-
-### Install with pip
+Python 3.9+ required. QuantLib can be tricky on Windows — use conda if pip fails.
 
 ```bash
 pip install -r requirements.txt
+# or
+conda install -c conda-forge quantlib-python numpy pandas scipy matplotlib
+```
+
+Each script prompts for a quote date at runtime:
+
+```bash
+python models/BlackScholesOPM.py        # calibration table + 4 graphs
+python models/HestonOPM.py              # Heston params + Feller check + 3 graphs
+python models/MertonJumpDiffusionOPM.py # multi-start calibration + Greeks + 4 graphs
+```
+
+**Interesting dates to try:**
+
+| Date | Event |
+|---|---|
+| `2020-03-16` | COVID crash |
+| `2019-01-03` | AAPL profit warning |
+| `2016-06-24` | Brexit vol spike |
+
+---
+
+## References
+
+- Black & Scholes (1973). *The Pricing of Options and Corporate Liabilities.* Journal of Political Economy.
+- Heston (1993). *A Closed-Form Solution for Options with Stochastic Volatility.* Review of Financial Studies.
+- Merton (1976). *Option Prices When Underlying Stock Returns Are Discontinuous.* Journal of Financial Economics.
+- Gatheral (2006). *The Volatility Surface: A Practitioner's Guide.* Wiley Finance.
+- Cont & Tankov (2004). *Financial Modelling with Jump Processes.* Chapman & Hall.
+- [QuantLib](https://www.quantlib.org/) · [FRED H.15](https://www.federalreserve.gov/releases/h15/)
