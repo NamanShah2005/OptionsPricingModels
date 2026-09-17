@@ -1,0 +1,9 @@
+# AAPL Option Pricing Models — Python dependencies
+# Tested on Python 3.12 (Windows)
+# Install with: pip install -r requirements.txt
+
+numpy>=1.26
+pandas>=2.2
+scipy>=1.13
+matplotlib>=3.9
+QuantLib>=1.34
